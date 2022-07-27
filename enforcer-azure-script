@@ -1,0 +1,52 @@
+#!/bin/bash
+#set -ex
+# 1. In microseg console: navigate to desired namespace. For example: /customer-id/myazure-cloud-account
+# 2. Credentials -> App Credentials -> create, give it a filename firendly name
+#   Select "Namespace administrator" authorization, create. 
+#   Save the appcred json file to a secure store.
+# 3. Edit the varibales of this script. appcred should be pulled from your secure store
+# 4. Run the script. It will generate 2 yaml files. Apply the secret first, then enforcers.
+#   kubectl apply -f namespace-secret-*.yaml
+#   kubectl -n aporeto apply -f prisma-enforcer-*.yaml
+
+# API URL can be found under the key icon -> configure apoctl (parameter is -A)
+api=https://api.region.network.prismacloud.io
+# filename of your appcred json file from your secret store
+appcred=appcred-filename.json
+# Base namespace from the example above (this is the namespace in which you created the appcred)
+base-ns=/customer-id/myazure-cloud-account
+
+# The group level namespace should come from the DevOps pipeline. For example: my-cluster-1
+# Here the variable to assing the input to is NEW-NAMESPACE
+ns=${NEW-NAMESPACE:?"Please provide new namespace"}
+
+echo "Downloading apoctl"
+if [ ! -f /tmp/apoctl ]; then
+  curl -o /tmp/apoctl https://download.aporeto.com/prismacloud/app2/apoctl/linux/apoctl 
+  chmod +x /tmp/apoctl
+fi
+
+echo "Getting token"
+token=$(/tmp/apoctl auth appcred -A $api --path $appcred )
+
+echo "Creating kubernetes cluster namespace in ${base-ns}/${ns}"
+/tmp/apoctl api create namespace -k name $ns -k description "Auto created $(date)" -n $base-ns --token $token
+# Allow for a few seconds before populating the namespace
+sleep 15s
+
+echo "Installing enforcers in ${base-ns}/${ns}"
+/tmp/apoctl enforcer install k8s \
+--cluster-type aks \
+--api  $api \
+--installation-mode yaml \
+--output-dir . \
+--namespace ${base-ns}/${ns} \
+--token $token
+
+echo "Removing apoctl"
+rm -f /tmp/apoctl
+
+echo "Applying resulting yaml files in correct order"
+kubectl apply -f namespace-secret-*.yaml && kubectl -n aporeto apply -f prisma-enforcer-*.yaml
+
+echo "Done."
